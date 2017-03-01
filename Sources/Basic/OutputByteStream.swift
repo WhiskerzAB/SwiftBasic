@@ -89,7 +89,7 @@ public class OutputByteStream: TextOutputStream {
     }
 
     /// Write an individual byte to the buffer.
-    public final func write(_ byte: UInt8) {
+    public func write(_ byte: UInt8) {
         // If buffer is full, write and clear it.
         if availableBufferSize == 0 {
             writeImpl(buffer)
@@ -146,17 +146,17 @@ public class OutputByteStream: TextOutputStream {
     }
 
     /// Write the contents of a UnsafeBufferPointer<UInt8>.
-    final func write(_ ptr: UnsafeBufferPointer<UInt8>) {
+    func write(_ ptr: UnsafeBufferPointer<UInt8>) {
         write(collection: ptr)
     }
     
     /// Write a sequence of bytes to the buffer.
-    public final func write(_ bytes: ArraySlice<UInt8>) {
+    public func write(_ bytes: ArraySlice<UInt8>) {
         write(collection: bytes)
     }
 
     /// Write a sequence of bytes to the buffer.
-    public final func write(_ bytes: [UInt8]) {
+    public func write(_ bytes: [UInt8]) {
         write(collection: bytes)
     }
     
@@ -170,23 +170,23 @@ public class OutputByteStream: TextOutputStream {
     }
 
     /// Write a string to the buffer (as UTF8).
-    public final func write(_ string: String) {
+    public func write(_ string: String) {
         // FIXME(performance): Use `string.utf8._copyContents(initializing:)`.
         write(sequence: string.utf8)
     }
 
     /// Write a character to the buffer (as UTF8).
-    public final func write(_ character: Character) {
+    public func write(_ character: Character) {
         write(String(character))
     }
 
     /// Write an arbitrary byte streamable to the buffer.
-    public final func write(_ value: ByteStreamable) {
+    public func write(_ value: ByteStreamable) {
         value.write(to: self)
     }
 
     /// Write an arbitrary streamable to the buffer.
-    public final func write(_ value: TextOutputStreamable) {
+    public func write(_ value: TextOutputStreamable) {
         // Get a mutable reference.
         var stream: OutputByteStream = self
         value.write(to: &stream)
