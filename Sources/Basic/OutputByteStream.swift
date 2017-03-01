@@ -42,7 +42,7 @@ public protocol ByteStreamable {
 ///
 /// would write each item in the list to the stream, separating them with a
 /// space.
-public class OutputByteStream: TextOutputStream {
+open class OutputByteStream: TextOutputStream {
     /// The data buffer.
     /// Note: Minimum Buffer size should be one.
     private var buffer: [UInt8]
