@@ -1,7 +1,7 @@
 /*
  This source file is part of the Swift.org open source project
 
- Copyright 2016 Apple Inc. and the Swift project authors
+ Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
  Licensed under Apache License v2.0 with Runtime Library Exception
 
  See http://swift.org/LICENSE.txt for license information
@@ -79,7 +79,7 @@ public struct OrderedSet<E: Hashable>: Equatable, Collection {
     }
 }
 
-extension OrderedSet: ArrayLiteralConvertible {
+extension OrderedSet: ExpressibleByArrayLiteral {
     /// Create an instance initialized with `elements`.
     ///
     /// If an element occurs more than once in `element`, only the first one
@@ -90,13 +90,13 @@ extension OrderedSet: ArrayLiteralConvertible {
 }
 
 extension OrderedSet: RandomAccessCollection {
-    public var startIndex: Int { return array.startIndex }
-    public var endIndex: Int { return array.endIndex }
+    public var startIndex: Int { return contents.startIndex }
+    public var endIndex: Int { return contents.endIndex }
     public subscript(i: Int) -> Element {
-      return array[i]
+      return contents[i]
     }
 }
 
 public func ==<T>(lhs: OrderedSet<T>, rhs: OrderedSet<T>) -> Bool {
-    return lhs.array == rhs.array
+    return lhs.contents == rhs.contents
 }

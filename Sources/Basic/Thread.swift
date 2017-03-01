@@ -1,15 +1,14 @@
 /*
  This source file is part of the Swift.org open source project
 
- Copyright 2015 - 2016 Apple Inc. and the Swift project authors
+ Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
  Licensed under Apache License v2.0 with Runtime Library Exception
 
  See http://swift.org/LICENSE.txt for license information
  See http://swift.org/CONTRIBUTORS.txt for Swift project authors
 */
 
-import class Foundation.Thread
-import class Foundation.Condition
+import Foundation
 
 /// This class bridges the gap between OSX and Linux Foundation Threading API.
 /// It provides closure based execution and a join method to block the calling thread
@@ -27,7 +26,7 @@ final public class Thread {
     private var finished: Bool
 
     /// Creates an instance of thread class with closure to be executed when start() is called.
-    public init(task: () -> Void) {
+    public init(task: @escaping () -> Void) {
         finished = false
         finishedCondition = Condition()
 
@@ -48,7 +47,7 @@ final public class Thread {
             }
         }
 
-        self.thread = ThreadImpl(theTask)
+        self.thread = ThreadImpl(block: theTask)
     }
 
     /// Starts the thread execution.
@@ -66,7 +65,7 @@ final public class Thread {
     }
 }
 
-#if os(OSX)
+#if os(macOS)
 /// A helper subclass of Foundation's Thread with closure support.
 final private class ThreadImpl: Foundation.Thread {
 
@@ -77,7 +76,7 @@ final private class ThreadImpl: Foundation.Thread {
         task()
     }
 
-    init(_ task: () -> Void) {
+    init(block task: @escaping () -> Void) {
         self.task = task
     }
 }

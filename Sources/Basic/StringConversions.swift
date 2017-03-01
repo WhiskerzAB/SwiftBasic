@@ -1,7 +1,7 @@
 /*
  This source file is part of the Swift.org open source project
 
- Copyright 2015 - 2016 Apple Inc. and the Swift project authors
+ Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
  Licensed under Apache License v2.0 with Runtime Library Exception
 
  See http://swift.org/LICENSE.txt for license information
@@ -18,6 +18,7 @@ private func inShellWhitelist(_ codeUnit: UInt8) -> Bool {
     switch codeUnit {
         case UInt8(ascii: "a")...UInt8(ascii: "z"),
              UInt8(ascii: "A")...UInt8(ascii: "Z"),
+             UInt8(ascii: "0")...UInt8(ascii: "9"),
              UInt8(ascii: "-"),
              UInt8(ascii: "_"),
              UInt8(ascii: "/"),
@@ -53,7 +54,7 @@ public extension String {
         }
 
         // Otherwise iterate and escape all the single quotes.
-        var newString = "'" + String(utf8[utf8.startIndex..<singleQuotePos])
+        var newString = "'" + String(utf8[utf8.startIndex..<singleQuotePos])!
 
         for char in utf8[singleQuotePos..<utf8.endIndex] {
             if char == UInt8(ascii: "'") {

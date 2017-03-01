@@ -1,7 +1,7 @@
 /*
  This source file is part of the Swift.org open source project
 
- Copyright 2016 Apple Inc. and the Swift project authors
+ Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
  Licensed under Apache License v2.0 with Runtime Library Exception
 
  See http://swift.org/LICENSE.txt for license information
@@ -91,13 +91,18 @@ public func ==(lhs: JSON, rhs: JSON) -> Bool {
 
 extension JSON {
     /// Encode a JSON item into a string of bytes.
-    public func toBytes() -> ByteString {
-        return (OutputByteStream() <<< self).bytes
+    public func toBytes(prettyPrint: Bool = false) -> ByteString {
+        let stream = BufferedOutputByteStream()
+        write(to: stream, indent: prettyPrint ? 0 : nil)
+        if prettyPrint {
+            stream.write("\n")
+        }
+        return stream.bytes
     }
     
     /// Encode a JSON item into a JSON string
-    public func toString() -> String {
-        guard let contents = self.toBytes().asString else {
+    public func toString(prettyPrint: Bool = false) -> String {
+        guard let contents = self.toBytes(prettyPrint: prettyPrint).asString else {
             fatalError("Failed to serialize JSON: \(self)")
         }
         return contents
@@ -107,6 +112,14 @@ extension JSON {
 /// Support writing to a byte stream.
 extension JSON: ByteStreamable {
     public func write(to stream: OutputByteStream) {
+        write(to: stream, indent: nil)
+    }
+
+    public func write(to stream: OutputByteStream, indent: Int?) {
+        func indentStreamable(offset: Int? = nil) -> ByteStreamable {
+            return Format.asRepeating(string: " ", count: indent.flatMap {$0 + (offset ?? 0)} ?? 0)
+        }
+        let shouldIndent = indent != nil
         switch self {
         case .null:
             stream <<< "null"
@@ -120,23 +133,22 @@ extension JSON: ByteStreamable {
         case .string(let value):
             stream <<< Format.asJSON(value)
         case .array(let contents):
-            // FIXME: OutputByteStream should just let us do this via conformances.
-            stream <<< "["
+            stream <<< "[" <<< (shouldIndent ? "\n" : "")
             for (i, item) in contents.enumerated() {
-                if i != 0 { stream <<< ", " }
-                stream <<< item
+                if i != 0 { stream <<< "," <<< (shouldIndent ? "\n" : " ") }
+                stream <<< indentStreamable(offset: 2)
+                item.write(to: stream, indent: indent.flatMap {$0 + 2})
             }
-            stream <<< "]"
+            stream <<< (shouldIndent ? "\n" : "") <<< indentStreamable() <<< "]"
         case .dictionary(let contents):
             // We always output in a deterministic order.
-            //
-            // FIXME: OutputByteStream should just let us do this via conformances.
-            stream <<< "{"
+            stream <<< "{" <<< (shouldIndent ? "\n" : "")
             for (i, key) in contents.keys.sorted().enumerated() {
-                if i != 0 { stream <<< ", " }
-                stream <<< Format.asJSON(key) <<< ": " <<< contents[key]!
+                if i != 0 { stream <<< "," <<< (shouldIndent ? "\n" : " ") }
+                stream <<<  indentStreamable(offset: 2) <<< Format.asJSON(key) <<< ": " 
+                contents[key]!.write(to: stream, indent: indent.flatMap{ $0 + 2})
             }
-            stream <<< "}"
+            stream <<< (shouldIndent ? "\n" : "") <<< indentStreamable() <<< "}"
         }
     }
 }
@@ -145,7 +157,7 @@ extension JSON: ByteStreamable {
 
 import Foundation
 
-enum JSONDecodingError: ErrorProtocol {
+enum JSONDecodingError: Swift.Error {
     /// The input byte string is malformed.
     case malformed
 }
@@ -158,7 +170,7 @@ enum JSONDecodingError: ErrorProtocol {
 // This allows the code to be portable, and expose a portable API, but it is not
 // very efficient.
 
-private let nsBooleanType = NSNumber(value: false).dynamicType
+private let nsBooleanType = type(of: NSNumber(value: false))
 extension JSON {
     private static func convertToJSON(_ object: Any) -> JSON {
         switch object {
@@ -171,7 +183,7 @@ extension JSON {
             // Check if this is a boolean.
             //
             // FIXME: This is all rather unfortunate and expensive.
-            if value.dynamicType === nsBooleanType {
+            if type(of: value) === nsBooleanType {
                 return .bool(value != 0)
             }
 
@@ -212,7 +224,7 @@ extension JSON {
             return .dictionary(result)
 
         default:
-            fatalError("unexpected object: \(object) \(object.dynamicType)")
+            fatalError("unexpected object: \(object) \(type(of: object))")
         }
     }
     

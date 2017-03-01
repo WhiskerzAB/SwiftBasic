@@ -1,7 +1,7 @@
 /*
  This source file is part of the Swift.org open source project
 
- Copyright 2016 Apple Inc. and the Swift project authors
+ Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
  Licensed under Apache License v2.0 with Runtime Library Exception
 
  See http://swift.org/LICENSE.txt for license information
@@ -13,7 +13,7 @@ import func POSIX.getenv
 import class Foundation.FileHandle
 import class Foundation.FileManager
 
-public enum TempFileError: ErrorProtocol {
+public enum TempFileError: Swift.Error {
     /// Could not create a unique temporary filename.
     case couldNotCreateUniqueName
     /// Some error thrown defined by posix's open().
@@ -43,7 +43,7 @@ private func determineTempDirectory(_ dir: AbsolutePath? = nil) -> AbsolutePath 
     // FIXME: Add other platform specific locations.
     let tmpDir = dir ?? cachedTempDirectory
     // FIXME: This is a runtime condition, so it should throw and not crash.
-    precondition(localFS.isDirectory(tmpDir))
+    precondition(localFileSystem.isDirectory(tmpDir))
     return tmpDir
 }
 
@@ -78,7 +78,7 @@ public final class TemporaryFile {
     /// goes out of scope.
     ///
     /// - Parameters:
-    ///     - dir: If specified the temporary file will be created in this directory otherwise enviornment variables
+    ///     - dir: If specified the temporary file will be created in this directory otherwise environment variables
     ///            TMPDIR, TEMP and TMP will be checked for a value (in that order). If none of the env variables are
     ///            set, dir will be set to `/tmp/`.
     ///     - prefix: The prefix to the temporary file name.
@@ -103,11 +103,13 @@ public final class TemporaryFile {
         if fd == -1 { throw TempFileError(errno: errno) }
 
         self.path = AbsolutePath(String(cString: template))
-        fileHandle = FileHandle(fileDescriptor: fd)
+        fileHandle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
     }
 
     /// Remove the temporary file before deallocating.
-    deinit { unlink(path.asString) }
+    deinit {
+        unlink(path.asString)
+    }
 }
 
 extension TemporaryFile: CustomStringConvertible {
@@ -116,9 +118,10 @@ extension TemporaryFile: CustomStringConvertible {
     }
 }
 
-// FIXME: This isn't right place to declare this, probably POSIX or merge with FSProxyError?
 /// Contains the error which can be thrown while creating a directory using POSIX's mkdir.
-public enum MakeDirectoryError: ErrorProtocol {
+//
+// FIXME: This isn't right place to declare this, probably POSIX or merge with FileSystemError?
+public enum MakeDirectoryError: Swift.Error {
     /// The given path already exists as a directory, file or symbolic link.
     case pathExists
     /// The path provided was too long.
@@ -167,7 +170,7 @@ public final class TemporaryDirectory {
     /// Creates a temporary directory which is automatically removed when the object of this class goes out of scope.
     ///
     /// - Parameters:
-    ///     - dir: If specified the temporary directory will be created in this directory otherwise enviornment variables
+    ///     - dir: If specified the temporary directory will be created in this directory otherwise environment variables
     ///            TMPDIR, TEMP and TMP will be checked for a value (in that order). If none of the env variables are
     ///            set, dir will be set to `/tmp/`.
     ///     - prefix: The prefix to the temporary file name.
@@ -195,7 +198,7 @@ public final class TemporaryDirectory {
     /// Remove the temporary file before deallocating.
     deinit {
         if removeTreeOnDeinit {
-            let _ = try? FileManager.default().removeItem(atPath: path.asString)
+            let _ = try? FileManager.default.removeItem(atPath: path.asString)
         } else {
             rmdir(path.asString)
         }

@@ -8,8 +8,13 @@
  See http://swift.org/CONTRIBUTORS.txt for Swift project authors
 */
 
-#if os(Linux)
-@_exported import Glibc
-#else
-@_exported import Darwin.C
-#endif
+extension Dictionary {
+    /// Convenience initializer to create dictionary from tuples.
+    public init<S: Sequence>(items: S) where S.Iterator.Element == (Key, Value) {
+        var result = Dictionary()
+        for (key, value) in items {
+            result[key] = value
+        }
+        self = result
+    }
+}

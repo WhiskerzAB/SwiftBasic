@@ -1,7 +1,7 @@
 /*
  This source file is part of the Swift.org open source project
 
- Copyright 2015 - 2016 Apple Inc. and the Swift project authors
+ Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
  Licensed under Apache License v2.0 with Runtime Library Exception
 
  See http://swift.org/LICENSE.txt for license information
@@ -21,9 +21,9 @@
 /// strings or and by eliminating wasted space in growable arrays). For
 /// construction of byte arrays, clients should use the `OutputByteStream` class
 /// and then convert to a `ByteString` when complete.
-public struct ByteString: ArrayLiteralConvertible {
+public struct ByteString: ExpressibleByArrayLiteral {
     /// The buffer contents.
-    private var _bytes: [UInt8]
+    fileprivate var _bytes: [UInt8]
 
     /// Create an empty byte string.
     public init() {
@@ -41,19 +41,13 @@ public struct ByteString: ArrayLiteralConvertible {
     }
     
     /// Create a byte string from an byte buffer.
-    public init<S : Sequence where S.Iterator.Element == UInt8>(_ contents: S) {
+    public init<S : Sequence> (_ contents: S) where S.Iterator.Element == UInt8 {
         _bytes = [UInt8](contents)
     }
     
     /// Create a byte string from the UTF8 encoding of a string.
     public init(encodingAsUTF8 string: String) {
-        let stringPtrStart = string._contiguousUTF8
-        defer { _fixLifetime(string) }
-        if stringPtrStart != nil {
-            _bytes = [UInt8](UnsafeBufferPointer(start: stringPtrStart, count: string.utf8.count))
-        } else {
-            _bytes = [UInt8](string.utf8)
-        }
+        _bytes = [UInt8](string.utf8)
     }
 
     /// Access the byte string contents as an array.
@@ -119,7 +113,7 @@ extension ByteString: ByteStreamable {
 }
 
 /// StringLiteralConvertable conformance for a ByteString.
-extension ByteString: StringLiteralConvertible {
+extension ByteString: ExpressibleByStringLiteral {
     public typealias UnicodeScalarLiteralType = StringLiteralType
     public typealias ExtendedGraphemeClusterLiteralType = StringLiteralType
 

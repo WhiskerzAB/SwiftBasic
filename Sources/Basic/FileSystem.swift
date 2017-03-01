@@ -1,7 +1,7 @@
 /*
  This source file is part of the Swift.org open source project
 
- Copyright 2015 - 2016 Apple Inc. and the Swift project authors
+ Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
  Licensed under Apache License v2.0 with Runtime Library Exception
 
  See http://swift.org/LICENSE.txt for license information
@@ -11,8 +11,7 @@
 import POSIX
 import libc
 
-
-public enum FSProxyError: ErrorProtocol {
+public enum FileSystemError: Swift.Error {
     /// Access to the path is denied.
     ///
     /// This is used when an operation cannot be completed because a component of
@@ -27,7 +26,7 @@ public enum FSProxyError: ErrorProtocol {
     /// not be decoded correctly.
     case invalidEncoding
     
-    /// IO Errork encoding
+    /// IO Error encoding
     ///
     /// This is used when an operation cannot be completed due to an otherwise
     /// unspecified IO error.
@@ -56,12 +55,18 @@ public enum FSProxyError: ErrorProtocol {
     ///
     /// Used in situations that correspond to the POSIX ENOTDIR error code.
     case notDirectory
+    
+    /// Unsupported operation
+    ///
+    /// This is used when an operation is not supported by the concrete file
+    /// system implementation.
+    case unsupported
 
     /// An unspecific operating system error.
     case unknownOSError
 }
 
-private extension FSProxyError {
+extension FileSystemError {
     init(errno: Int32) {
         switch errno {
         case libc.EACCES:
@@ -87,13 +92,19 @@ private extension FSProxyError {
 /// NOTE: All of these APIs are synchronous and can block.
 //
 // FIXME: Design an asynchronous story?
-public protocol FSProxy {
+public protocol FileSystem {
     /// Check whether the given path exists and is accessible.
     func exists(_ path: AbsolutePath) -> Bool
     
     /// Check whether the given path is accessible and a directory.
     func isDirectory(_ path: AbsolutePath) -> Bool
     
+    /// Check whether the given path is accessible and a file.
+    func isFile(_ path: AbsolutePath) -> Bool
+
+    /// Check whether the given path is accessible and is a symbolic link.
+    func isSymlink(_ path: AbsolutePath) -> Bool
+
     /// Get the contents of the given directory, in an undefined order.
     //
     // FIXME: Actual file system interfaces will allow more efficient access to
@@ -119,60 +130,50 @@ public protocol FSProxy {
     //
     // FIXME: This is obviously not a very efficient or flexible API.
     mutating func writeFileContents(_ path: AbsolutePath, bytes: ByteString) throws
+
+    /// Recursively deletes the file system entity at `path`.
+    /// If there is no file system entity at `path`, this function does nothing (in particular, this is not considered to be an error).
+    mutating func removeFileTree(_ path: AbsolutePath)
 }
 
 /// Convenience implementations (default arguments aren't permitted in protocol
 /// methods).
-public extension FSProxy {
+public extension FileSystem {
     /// Default implementation of createDirectory(_:)
     mutating func createDirectory(_ path: AbsolutePath) throws {
         try createDirectory(path, recursive: false)
     }
-}
 
-/// Temporary shims during String -> Path transition.
-public extension FSProxy {
-    func exists(_ path: String) -> Bool {
-        return exists(AbsolutePath(path))
-    }
-    func isDirectory(_ path: String) -> Bool {
-        return isDirectory(AbsolutePath(path))
-    }
-    func getDirectoryContents(_ path: String) throws -> [String] {
-        return try getDirectoryContents(AbsolutePath(path))
-    }
-    mutating func createDirectory(_ path: String) throws {
-        try createDirectory(AbsolutePath(path))
-    }
-    mutating func createDirectory(_ path: String, recursive: Bool) throws {
-        try createDirectory(AbsolutePath(path), recursive: recursive)
-    }
-    func readFileContents(_ path: String) throws -> ByteString {
-        return try readFileContents(AbsolutePath(path))
-    }
-    mutating func writeFileContents(_ path: String, bytes: ByteString) throws {
-        try writeFileContents(AbsolutePath(path), bytes: bytes)
+    /// Write to a file from a stream producer.
+    mutating func writeFileContents(_ path: AbsolutePath, body: (OutputByteStream) -> ()) throws {
+        let contents = BufferedOutputByteStream()
+        body(contents)
+        try createDirectory(path.parentDirectory, recursive: true)
+        try writeFileContents(path, bytes: contents.bytes)
     }
 }
 
-/// Concrete FSProxy implementation which communicates with the local file system.
-private class LocalFS: FSProxy {
+/// Concrete FileSystem implementation which communicates with the local file system.
+private class LocalFileSystem: FileSystem {
     func exists(_ path: AbsolutePath) -> Bool {
-        return (try? stat(path.asString)) != nil
+        return Basic.exists(path)
     }
     
     func isDirectory(_ path: AbsolutePath) -> Bool {
-        guard let status = try? stat(path.asString) else {
-            return false
-        }
-        // FIXME: We should probably have wrappers or something for this, so it
-        // all comes from the POSIX module.
-        return (status.st_mode & libc.S_IFDIR) != 0
+        return Basic.isDirectory(path)
+    }
+
+    func isFile(_ path: AbsolutePath) -> Bool {
+        return Basic.isFile(path)
+    }
+
+    func isSymlink(_ path: AbsolutePath) -> Bool {
+        return Basic.isSymlink(path)
     }
     
     func getDirectoryContents(_ path: AbsolutePath) throws -> [String] {
         guard let dir = libc.opendir(path.asString) else {
-            throw FSProxyError(errno: errno)
+            throw FileSystemError(errno: errno)
         }
         defer { _ = libc.closedir(dir) }
         
@@ -184,7 +185,7 @@ private class LocalFS: FSProxy {
             if readdir_r(dir, &entry, &entryPtr) < 0 {
                 // FIXME: Are there ever situation where we would want to
                 // continue here?
-                throw FSProxyError(errno: errno)
+                throw FileSystemError(errno: errno)
             }
             
             // If the entry pointer is null, we reached the end of the directory.
@@ -197,7 +198,7 @@ private class LocalFS: FSProxy {
             
             // Add the entry to the result.
             guard let name = entry.name else {
-                throw FSProxyError.invalidEncoding
+                throw FileSystemError.invalidEncoding
             }
             
             // Ignore the pseudo-entries.
@@ -232,7 +233,7 @@ private class LocalFS: FSProxy {
             try createDirectory(path, recursive: false)
         } else {
             // Otherwise, we failed due to some other error. Report it.
-            throw FSProxyError(errno: errno)
+            throw FileSystemError(errno: errno)
         }
     }
     
@@ -240,22 +241,22 @@ private class LocalFS: FSProxy {
         // Open the file.
         let fp = fopen(path.asString, "rb")
         if fp == nil {
-            throw FSProxyError(errno: errno)
+            throw FileSystemError(errno: errno)
         }
         defer { fclose(fp) }
 
         // Read the data one block at a time.
-        let data = OutputByteStream()
+        let data = BufferedOutputByteStream()
         var tmpBuffer = [UInt8](repeating: 0, count: 1 << 12)
         while true {
             let n = fread(&tmpBuffer, 1, tmpBuffer.count, fp)
             if n < 0 {
                 if errno == EINTR { continue }
-                throw FSProxyError.ioError
+                throw FileSystemError.ioError
             }
             if n == 0 {
                 if ferror(fp) != 0 {
-                    throw FSProxyError.ioError
+                    throw FileSystemError.ioError
                 }
                 break
             }
@@ -269,7 +270,7 @@ private class LocalFS: FSProxy {
         // Open the file.
         let fp = fopen(path.asString, "wb")
         if fp == nil {
-            throw FSProxyError(errno: errno)
+            throw FileSystemError(errno: errno)
         }
         defer { fclose(fp) }
 
@@ -279,20 +280,26 @@ private class LocalFS: FSProxy {
             let n = fwrite(&contents, 1, contents.count, fp)
             if n < 0 {
                 if errno == EINTR { continue }
-                throw FSProxyError.ioError
+                throw FileSystemError.ioError
             }
             if n != contents.count {
-                throw FSProxyError.ioError
+                throw FileSystemError.ioError
             }
             break
         }
     }
+
+    func removeFileTree(_ path: AbsolutePath) {
+        if self.exists(path) {
+            try? Basic.removeFileTree(path)
+        }
+    }
 }
 
-/// Concrete FSProxy implementation which simulates an empty disk.
+/// Concrete FileSystem implementation which simulates an empty disk.
 //
 // FIXME: This class does not yet support concurrent mutation safely.
-public class PseudoFS: FSProxy {
+public class InMemoryFileSystem: FileSystem {
     private class Node {
         /// The actual node data.
         let contents: NodeContents
@@ -300,10 +307,25 @@ public class PseudoFS: FSProxy {
         init(_ contents: NodeContents) {
             self.contents = contents
         }
+
+        /// Creates deep copy of the object.
+        func copy() -> Node {
+           return Node(contents.copy()) 
+        }
     }
     private enum NodeContents {
-        case File(ByteString)
-        case Directory(DirectoryContents)
+        case file(ByteString)
+        case directory(DirectoryContents)
+
+        /// Creates deep copy of the object.
+        func copy() -> NodeContents {
+            switch self {
+            case .file(let bytes):
+                return .file(bytes)
+            case .directory(let contents):
+                return .directory(contents.copy())
+            }
+        }
     }    
     private class DirectoryContents {
         var entries:  [String: Node]
@@ -311,16 +333,32 @@ public class PseudoFS: FSProxy {
         init(entries: [String: Node] = [:]) {
             self.entries = entries
         }
+
+        /// Creates deep copy of the object.
+        func copy() -> DirectoryContents {
+            let contents = DirectoryContents()
+            for (key, node) in entries {
+                contents.entries[key] = node.copy()
+            }
+            return contents
+        }
     }
     
     /// The root filesytem.
     private var root: Node
 
     public init() {
-        root = Node(.Directory(DirectoryContents()))
+        root = Node(.directory(DirectoryContents()))
     }
 
-    /// Get the node corresponding to get given path.
+    /// Creates deep copy of the object.
+    public func copy() -> InMemoryFileSystem {
+        let fs = InMemoryFileSystem()
+        fs.root = root.copy()
+        return fs
+    }
+
+    /// Get the node corresponding to the given path.
     private func getNode(_ path: AbsolutePath) throws -> Node? {
         func getNodeInternal(_ path: AbsolutePath) throws -> Node? {
             // If this is the root node, return it.
@@ -334,8 +372,8 @@ public class PseudoFS: FSProxy {
             }
 
             // If we didn't find a directory, this is an error.
-            guard case .Directory(let contents) = parent.contents else {
-                throw FSProxyError.notDirectory
+            guard case .directory(let contents) = parent.contents else {
+                throw FileSystemError.notDirectory
             }
 
             // Return the directory entry.
@@ -346,7 +384,7 @@ public class PseudoFS: FSProxy {
         return try getNodeInternal(path)
     }
 
-    // MARK: FSProxy Implementation
+    // MARK: FileSystem Implementation
     
     public func exists(_ path: AbsolutePath) -> Bool {
         do {
@@ -358,7 +396,7 @@ public class PseudoFS: FSProxy {
     
     public func isDirectory(_ path: AbsolutePath) -> Bool {
         do {
-            if case .Directory? = try getNode(path)?.contents {
+            if case .directory? = try getNode(path)?.contents {
                 return true
             }
             return false
@@ -366,13 +404,30 @@ public class PseudoFS: FSProxy {
             return false
         }
     }
+
+    public func isFile(_ path: AbsolutePath) -> Bool {
+        do {
+            if case .file? = try getNode(path)?.contents {
+                return true
+            }
+            return false
+        } catch {
+            return false
+        }
+    }
+
+    public func isSymlink(_ path: AbsolutePath) -> Bool {
+        // FIXME: Always return false until in memory implementation
+        // gets symbolic link semantics.
+        return false
+    }
     
     public func getDirectoryContents(_ path: AbsolutePath) throws -> [String] {
         guard let node = try getNode(path) else {
-            throw FSProxyError.noEntry
+            throw FileSystemError.noEntry
         }
-        guard case .Directory(let contents) = node.contents else {
-            throw FSProxyError.notDirectory
+        guard case .directory(let contents) = node.contents else {
+            throw FileSystemError.notDirectory
         }
 
         // FIXME: Perhaps we should change the protocol to allow lazy behavior.
@@ -380,6 +435,10 @@ public class PseudoFS: FSProxy {
     }
 
     public func createDirectory(_ path: AbsolutePath, recursive: Bool) throws {
+        // Ignore if client passes root.
+        guard !path.isRoot else {
+            return
+        }
         // Get the parent directory node.
         let parentPath = path.parentDirectory
         guard let parent = try getNode(parentPath) else {
@@ -393,22 +452,22 @@ public class PseudoFS: FSProxy {
                 return try createDirectory(path, recursive: false)
             } else {
                 // Otherwise, we failed.
-                throw FSProxyError.noEntry
+                throw FileSystemError.noEntry
             }
         }
 
         // Check that the parent is a directory.
-        guard case .Directory(let contents) = parent.contents else {
+        guard case .directory(let contents) = parent.contents else {
             // The parent isn't a directory, this is an error.
-            throw FSProxyError.notDirectory
+            throw FileSystemError.notDirectory
         }
         
         // Check if the node already exists.
         if let node = contents.entries[path.basename] {
             // Verify it is a directory.
-            guard case .Directory = node.contents else {
+            guard case .directory = node.contents else {
                 // The path itself isn't a directory, this is an error.
-                throw FSProxyError.notDirectory
+                throw FileSystemError.notDirectory
             }
 
             // We are done.
@@ -416,19 +475,19 @@ public class PseudoFS: FSProxy {
         }
 
         // Otherwise, the node does not exist, create it.
-        contents.entries[path.basename] = Node(.Directory(DirectoryContents()))
+        contents.entries[path.basename] = Node(.directory(DirectoryContents()))
     }
 
     public func readFileContents(_ path: AbsolutePath) throws -> ByteString {
         // Get the node.
         guard let node = try getNode(path) else {
-            throw FSProxyError.noEntry
+            throw FileSystemError.noEntry
         }
 
         // Check that the node is a file.
-        guard case .File(let contents) = node.contents else {
+        guard case .file(let contents) = node.contents else {
             // The path is a directory, this is an error.
-            throw FSProxyError.isDirectory
+            throw FileSystemError.isDirectory
         }
 
         // Return the file contents.
@@ -439,33 +498,117 @@ public class PseudoFS: FSProxy {
         // It is an error if this is the root node.
         let parentPath = path.parentDirectory
         guard path != parentPath else {
-            throw FSProxyError.isDirectory
+            throw FileSystemError.isDirectory
         }
             
         // Get the parent node.
         guard let parent = try getNode(parentPath) else {
-            throw FSProxyError.noEntry
+            throw FileSystemError.noEntry
         }
 
         // Check that the parent is a directory.
-        guard case .Directory(let contents) = parent.contents else {
+        guard case .directory(let contents) = parent.contents else {
             // The parent isn't a directory, this is an error.
-            throw FSProxyError.notDirectory
+            throw FileSystemError.notDirectory
         }
 
         // Check if the node exists.
         if let node = contents.entries[path.basename] {
             // Verify it is a file.
-            guard case .File = node.contents else {
+            guard case .file = node.contents else {
                 // The path is a directory, this is an error.
-                throw FSProxyError.isDirectory
+                throw FileSystemError.isDirectory
             }
         }
 
         // Write the file.
-        contents.entries[path.basename] = Node(.File(bytes))
+        contents.entries[path.basename] = Node(.file(bytes))
+    }
+
+    public func removeFileTree(_ path: AbsolutePath) {
+        // Ignore root and get the parent node's content if its a directory.
+        guard !path.isRoot,
+              let parent = try? getNode(path.parentDirectory),
+              case .directory(let contents)? = parent?.contents else {
+            return
+        }
+        // Set it to nil to release the contents.
+        contents.entries[path.basename] = nil
+    }
+}
+
+/// A rerooted view on an existing FileSystem.
+///
+/// This is a simple wrapper which creates a new FileSystem view into a subtree
+/// of an existing filesystem. This is useful for passing to clients which only
+/// need access to a subtree of the filesystem but should otherwise remain
+/// oblivious to its concrete location.
+///
+/// NOTE: The rerooting done here is purely at the API level and does not
+/// inherently prevent access outside the rerooted path (e.g., via symlinks). It
+/// is designed for situations where a client is only interested in the contents
+/// *visible* within a subpath and is agnostic to the actual location of those
+/// contents.
+public struct RerootedFileSystemView: FileSystem {
+    /// The underlying file system.
+    private var underlyingFileSystem: FileSystem
+
+    /// The root path within the containing file system.
+    private let root: AbsolutePath
+    
+    public init(_ underlyingFileSystem: inout FileSystem, rootedAt root: AbsolutePath) {
+        self.underlyingFileSystem = underlyingFileSystem
+        self.root = root
+    }
+
+    /// Adjust the input path for the underlying file system.
+    private func formUnderlyingPath(_ path: AbsolutePath) -> AbsolutePath {
+        if path == AbsolutePath.root {
+            return root
+        } else {
+            // FIXME: Optimize?
+            return root.appending(RelativePath(String(path.asString.characters.dropFirst(1))))
+        }
+    }
+    
+    // MARK: FileSystem Implementation
+
+    public func exists(_ path: AbsolutePath) -> Bool {
+        return underlyingFileSystem.exists(formUnderlyingPath(path))
+    }
+    
+    public func isDirectory(_ path: AbsolutePath) -> Bool {
+        return underlyingFileSystem.isDirectory(formUnderlyingPath(path))
+    }
+    
+    public func isFile(_ path: AbsolutePath) -> Bool {
+        return underlyingFileSystem.isFile(formUnderlyingPath(path))
+    }
+
+    public func isSymlink(_ path: AbsolutePath) -> Bool {
+        return underlyingFileSystem.isSymlink(formUnderlyingPath(path))
+    }
+
+    public func getDirectoryContents(_ path: AbsolutePath) throws -> [String] {
+        return try underlyingFileSystem.getDirectoryContents(formUnderlyingPath(path))
+    }
+
+    public mutating func createDirectory(_ path: AbsolutePath, recursive: Bool) throws {
+        return try underlyingFileSystem.createDirectory(formUnderlyingPath(path), recursive: recursive)
+    }
+
+    public func readFileContents(_ path: AbsolutePath) throws -> ByteString {
+        return try underlyingFileSystem.readFileContents(formUnderlyingPath(path))
+    }
+
+    public mutating func writeFileContents(_ path: AbsolutePath, bytes: ByteString) throws {
+        return try underlyingFileSystem.writeFileContents(formUnderlyingPath(path), bytes: bytes)
+    }
+
+    public mutating func removeFileTree(_ path: AbsolutePath) {
+        underlyingFileSystem.removeFileTree(path)
     }
 }
 
 /// Public access to the local FS proxy.
-public var localFS: FSProxy = LocalFS()
+public var localFileSystem: FileSystem = LocalFileSystem()

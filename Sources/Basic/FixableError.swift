@@ -8,8 +8,16 @@
  See http://swift.org/CONTRIBUTORS.txt for Swift project authors
 */
 
-#if os(Linux)
-@_exported import Glibc
-#else
-@_exported import Darwin.C
-#endif
+public protocol FixableError: CustomStringConvertible {
+    var error: String { get }
+    var fix: String? { get }
+}
+
+extension FixableError {
+    public var description: String {
+        switch fix {
+        case let fix?: return "\(error) fix: \(fix)"
+        case .none: return error
+        }
+    }
+}
