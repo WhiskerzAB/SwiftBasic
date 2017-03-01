@@ -50,7 +50,7 @@ public class OutputByteStream: TextOutputStream {
     /// Default buffer size of the data buffer.
     private static let bufferSize = 1024
 
-    init() {
+    public init() {
         self.buffer = []
         self.buffer.reserveCapacity(OutputByteStream.bufferSize)
     }
